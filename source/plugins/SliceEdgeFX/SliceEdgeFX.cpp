@@ -143,9 +143,6 @@ SliceEdgeFX::SliceEdgeFX()
     FFGLLog::LogToHost("Created ADHENZO Refine Edge");
 }
 
-SliceEdgeFX::~SliceEdgeFX()
-{
-}
 
 FFResult SliceEdgeFX::InitGL(const FFGLViewportStruct* vp)
 {
