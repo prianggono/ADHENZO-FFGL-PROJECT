@@ -20,24 +20,4 @@ private:
     ffglex::FFGLScreenQuad quad;
 
     float roundness;
-    bool equalCorners;
-
-    float radiusTL;
-    float radiusTR;
-    float radiusBR;
-    float radiusBL;
-
-    float softEdge;
-
-    float strokeWidth;
-    float strokeOpacity;
-
-    float colorR;
-    float colorG;
-    float colorB;
-
-    float glow;
-    float glowSize;
-
-    float effectMix;
 };
