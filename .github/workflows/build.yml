@@ -26,14 +26,25 @@ jobs:
           $f = "ffgl/build/windows/AddSubtract.vcxproj.filters"
           (Get-Content $p -Raw).Replace("..\..\source\plugins\AddSubtract\AddSubtract.cpp","..\..\source\plugins\AddSubtract\SliceEdgeFX.cpp").Replace("..\..\source\plugins\AddSubtract\AddSubtract.h","..\..\source\plugins\AddSubtract\SliceEdgeFX.h").Replace("<WindowsTargetPlatformVersion>10.0.18362.0</WindowsTargetPlatformVersion>","<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>").Replace("<PlatformToolset>v142</PlatformToolset>","<PlatformToolset>v143</PlatformToolset>") | Set-Content $p -Encoding UTF8
           (Get-Content $f -Raw).Replace("..\..\source\plugins\AddSubtract\AddSubtract.cpp","..\..\source\plugins\AddSubtract\SliceEdgeFX.cpp").Replace("..\..\source\plugins\AddSubtract\AddSubtract.h","..\..\source\plugins\AddSubtract\SliceEdgeFX.h") | Set-Content $f -Encoding UTF8
+      - name: Locate MSBuild
+        id: msbuild
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild.exe not found" }
+          "path=$msbuild" >> $env:GITHUB_OUTPUT
+          Write-Host "Using MSBuild: $msbuild"
       - name: Build x64 Release
         shell: pwsh
-        run: msbuild ffgl/build/windows/AddSubtract.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+        run: |
+          & "${{ steps.msbuild.outputs.path }}" "ffgl/build/windows/AddSubtract.vcxproj" /p:Configuration=Release /p:Platform=x64 /m
       - name: Package plugin
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "ffgl/binaries/x64/Release/AddSubtract.dll" "dist/ADHENZO-Refine-Edge.dll"
+          $dll = Get-ChildItem "ffgl/binaries/x64/Release" -Filter "*.dll" | Select-Object -First 1
+          if (-not $dll) { throw "Build succeeded but DLL was not found." }
+          Copy-Item $dll.FullName "dist/ADHENZO-Refine-Edge.dll"
           Compress-Archive -Path dist/ADHENZO-Refine-Edge.dll -DestinationPath ADHENZO-Refine-Edge.zip -Force
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
