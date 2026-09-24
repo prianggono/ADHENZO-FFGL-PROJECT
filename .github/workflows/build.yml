@@ -1,0 +1,42 @@
+name: Build ADHENZO Refine Edge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout ADHENZO project
+        uses: actions/checkout@v4
+      - name: Checkout Resolume FFGL SDK
+        shell: pwsh
+        run: git clone --depth 1 --recurse-submodules https://github.com/resolume/ffgl.git ffgl
+      - name: Install ADHENZO source
+        shell: pwsh
+        run: |
+          Copy-Item "source/plugins/SliceEdgeFX/SliceEdgeFX.cpp" "ffgl/source/plugins/AddSubtract/SliceEdgeFX.cpp" -Force
+          Copy-Item "source/plugins/SliceEdgeFX/SliceEdgeFX.h" "ffgl/source/plugins/AddSubtract/SliceEdgeFX.h" -Force
+      - name: Patch FFGL Visual Studio project
+        shell: pwsh
+        run: |
+          $p = "ffgl/build/windows/AddSubtract.vcxproj"
+          $f = "ffgl/build/windows/AddSubtract.vcxproj.filters"
+          (Get-Content $p -Raw).Replace("..\..\source\plugins\AddSubtract\AddSubtract.cpp","..\..\source\plugins\AddSubtract\SliceEdgeFX.cpp").Replace("..\..\source\plugins\AddSubtract\AddSubtract.h","..\..\source\plugins\AddSubtract\SliceEdgeFX.h").Replace("<WindowsTargetPlatformVersion>10.0.18362.0</WindowsTargetPlatformVersion>","<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>").Replace("<PlatformToolset>v142</PlatformToolset>","<PlatformToolset>v143</PlatformToolset>") | Set-Content $p -Encoding UTF8
+          (Get-Content $f -Raw).Replace("..\..\source\plugins\AddSubtract\AddSubtract.cpp","..\..\source\plugins\AddSubtract\SliceEdgeFX.cpp").Replace("..\..\source\plugins\AddSubtract\AddSubtract.h","..\..\source\plugins\AddSubtract\SliceEdgeFX.h") | Set-Content $f -Encoding UTF8
+      - name: Build x64 Release
+        shell: pwsh
+        run: msbuild ffgl/build/windows/AddSubtract.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+      - name: Package plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "ffgl/binaries/x64/Release/AddSubtract.dll" "dist/ADHENZO-Refine-Edge.dll"
+          Compress-Archive -Path dist/ADHENZO-Refine-Edge.dll -DestinationPath ADHENZO-Refine-Edge.zip -Force
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ADHENZO-Refine-Edge
+          path: ADHENZO-Refine-Edge.zip
