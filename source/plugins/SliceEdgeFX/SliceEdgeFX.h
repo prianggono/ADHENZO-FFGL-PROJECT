@@ -19,10 +19,15 @@ private:
     ffglex::FFGLShader shader;
     ffglex::FFGLScreenQuad quad;
 
+    float roundness;
+    bool equalCorners;
+
     float radiusTL;
     float radiusTR;
     float radiusBR;
     float radiusBL;
+
+    float softEdge;
 
     float strokeWidth;
     float strokeOpacity;
