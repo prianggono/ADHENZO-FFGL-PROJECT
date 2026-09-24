@@ -1,12 +1,9 @@
 #include "SliceEdgeFX.h"
-
 using namespace ffglex;
 
-namespace
+enum ParamType : FFUInt32
 {
-enum
-{
-    PT_RADIUS_TL = 0,
+    PT_RADIUS_TL,
     PT_RADIUS_TR,
     PT_RADIUS_BR,
     PT_RADIUS_BL,
@@ -17,46 +14,38 @@ enum
     PT_COLOR_B,
     PT_GLOW,
     PT_GLOW_SIZE,
-    PT_EFFECT_MIX,
-    PT_COUNT
+    PT_EFFECT_MIX
 };
 
 static CFFGLPluginInfo PluginInfo(
     PluginFactory<SliceEdgeFX>,
     "AREF",
     "ADHENZO Refine Edge",
-    1,
-    2,
-    1,
-    0,
+    2, 1,
+    1, 0,
     FF_EFFECT,
-    "Rounded slice edge with adjustable stroke and glow.",
+    "Refine slice edges with independent corner radius, stroke and glow.",
     "ADHENZO Creative Technology"
 );
 
-const char* VertexShader = R"GLSL(
-#version 410 core
+static const char VertexShader[] = R"(#version 410 core
 uniform vec2 MaxUV;
-layout(location = 0) in vec3 vPosition;
-layout(location = 2) in vec2 vUV;
+layout(location = 0) in vec4 vPosition;
+layout(location = 1) in vec2 vUV;
 out vec2 uv;
-
 void main()
 {
-    gl_Position = vec4(vPosition, 1.0);
+    gl_Position = vPosition;
     uv = vUV * MaxUV;
 }
-)GLSL";
+)";
 
-const char* FragmentShader = R"GLSL(
-#version 410 core
+static const char FragmentShader[] = R"(#version 410 core
 uniform sampler2D InputTexture;
-
 uniform float RadiusTL;
 uniform float RadiusTR;
 uniform float RadiusBR;
 uniform float RadiusBL;
-
 uniform float StrokeWidth;
 uniform float StrokeOpacity;
 uniform vec3 StrokeColor;
@@ -65,7 +54,7 @@ uniform float GlowSize;
 uniform float EffectMix;
 
 in vec2 uv;
-out vec4 FragColor;
+out vec4 fragColor;
 
 float roundedBoxSDF(vec2 p, vec2 b, float r)
 {
@@ -73,11 +62,11 @@ float roundedBoxSDF(vec2 p, vec2 b, float r)
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-float selectedRadius(vec2 p)
+float cornerRadius(vec2 p)
 {
     if (p.x < 0.0 && p.y < 0.0) return RadiusTL;
-    if (p.x > 0.0 && p.y < 0.0) return RadiusTR;
-    if (p.x > 0.0 && p.y > 0.0) return RadiusBR;
+    if (p.x >= 0.0 && p.y < 0.0) return RadiusTR;
+    if (p.x >= 0.0 && p.y >= 0.0) return RadiusBR;
     return RadiusBL;
 }
 
@@ -86,34 +75,40 @@ void main()
     vec4 src = texture(InputTexture, uv);
 
     vec2 p = uv * 2.0 - 1.0;
-    float r = clamp(selectedRadius(p), 0.0, 0.5);
+    float r = clamp(cornerRadius(p), 0.0, 1.0);
+
+    // Keep the radius inside the half-size of the normalized rectangle.
+    r = min(r, 0.999);
 
     float d = roundedBoxSDF(p, vec2(1.0 - r), r);
     float aa = max(fwidth(d), 0.0001);
 
     float inside = 1.0 - smoothstep(0.0, aa, d);
 
-    float borderDistance = abs(d);
-    float stroke = 1.0 - smoothstep(StrokeWidth, StrokeWidth + aa, borderDistance);
-    stroke *= inside;
+    float stroke = 1.0 - smoothstep(
+        StrokeWidth,
+        StrokeWidth + aa,
+        abs(d)
+    );
+    stroke *= inside * StrokeOpacity;
 
-    float outsideGlow = 1.0 - smoothstep(
+    float glowBand = 1.0 - smoothstep(
         StrokeWidth,
         StrokeWidth + max(GlowSize, aa),
         abs(d)
     );
-    outsideGlow *= Glow;
-    outsideGlow *= (1.0 - inside);
+    glowBand *= (1.0 - inside) * Glow * StrokeOpacity;
 
-    vec3 edgeColor = StrokeColor;
-    vec3 rgb = mix(src.rgb, edgeColor, stroke * StrokeOpacity);
-    rgb = mix(rgb, edgeColor, outsideGlow * StrokeOpacity);
+    vec3 straightRgb = src.a > 0.00001 ? src.rgb / src.a : vec3(0.0);
+    vec3 effected = mix(straightRgb, StrokeColor, clamp(stroke + glowBand, 0.0, 1.0));
+    float alpha = src.a * inside;
 
-    float alpha = max(src.a * inside, stroke * StrokeOpacity);
-    FragColor = vec4(rgb, alpha);
+    // FFGL expects premultiplied color.
+    vec3 outRgb = effected * alpha;
+
+    fragColor = mix(src, vec4(outRgb, alpha), clamp(EffectMix, 0.0, 1.0));
 }
-)GLSL";
-}
+)";
 
 SliceEdgeFX::SliceEdgeFX()
     : radiusTL(0.08f)
@@ -145,50 +140,63 @@ SliceEdgeFX::SliceEdgeFX()
     SetParamInfof(PT_GLOW_SIZE, "Glow Size", FF_TYPE_STANDARD);
     SetParamInfof(PT_EFFECT_MIX, "Effect Mix", FF_TYPE_STANDARD);
 
-    mPlugInfo = &PluginInfo;
+    FFGLLog::LogToHost("Created ADHENZO Refine Edge");
+}
+
+SliceEdgeFX::~SliceEdgeFX()
+{
 }
 
 FFResult SliceEdgeFX::InitGL(const FFGLViewportStruct* vp)
 {
-    shader.Compile(VertexShader, FragmentShader);
-    quad.Initialize();
+    if (!shader.Compile(VertexShader, FragmentShader))
+    {
+        DeInitGL();
+        return FF_FAIL;
+    }
+
+    if (!quad.Initialise())
+    {
+        DeInitGL();
+        return FF_FAIL;
+    }
+
     return CFFGLPlugin::InitGL(vp);
 }
 
 FFResult SliceEdgeFX::ProcessOpenGL(ProcessOpenGLStruct* pGL)
 {
-    if (!pGL || !pGL->numInputTextures || !pGL->inputTextures[0])
+    if (pGL == nullptr || pGL->numInputTextures < 1 || pGL->inputTextures[0] == nullptr)
         return FF_FAIL;
 
-    FFGLTextureStruct* tex = pGL->inputTextures[0];
+    ScopedShaderBinding shaderBinding(shader.GetGLID());
+    ScopedSamplerActivation activateSampler(0);
+    Scoped2DTextureBinding textureBinding(pGL->inputTextures[0]->Handle);
 
-    shader.Bind();
-    shader.SetSampler("InputTexture", 0);
-    shader.SetUniform2f("MaxUV", tex->MaxU, tex->MaxV);
-    shader.SetUniform1f("RadiusTL", radiusTL);
-    shader.SetUniform1f("RadiusTR", radiusTR);
-    shader.SetUniform1f("RadiusBR", radiusBR);
-    shader.SetUniform1f("RadiusBL", radiusBL);
-    shader.SetUniform1f("StrokeWidth", strokeWidth);
-    shader.SetUniform1f("StrokeOpacity", strokeOpacity);
-    shader.SetUniform3f("StrokeColor", colorR, colorG, colorB);
-    shader.SetUniform1f("Glow", glow);
-    shader.SetUniform1f("GlowSize", glowSize);
-    shader.SetUniform1f("EffectMix", effectMix);
+    shader.Set("InputTexture", 0);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, tex->Handle);
+    FFGLTexCoords maxCoords = GetMaxGLTexCoords(*pGL->inputTextures[0]);
+    shader.Set("MaxUV", maxCoords.s, maxCoords.t);
+
+    glUniform1f(shader.FindUniform("RadiusTL"), radiusTL);
+    glUniform1f(shader.FindUniform("RadiusTR"), radiusTR);
+    glUniform1f(shader.FindUniform("RadiusBR"), radiusBR);
+    glUniform1f(shader.FindUniform("RadiusBL"), radiusBL);
+    glUniform1f(shader.FindUniform("StrokeWidth"), strokeWidth);
+    glUniform1f(shader.FindUniform("StrokeOpacity"), strokeOpacity);
+    glUniform3f(shader.FindUniform("StrokeColor"), colorR, colorG, colorB);
+    glUniform1f(shader.FindUniform("Glow"), glow);
+    glUniform1f(shader.FindUniform("GlowSize"), glowSize);
+    glUniform1f(shader.FindUniform("EffectMix"), effectMix);
+
     quad.Draw();
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    shader.Unbind();
     return FF_SUCCESS;
 }
 
 FFResult SliceEdgeFX::DeInitGL()
 {
-    quad.Free();
-    shader.Free();
+    shader.FreeGLResources();
+    quad.Release();
     return FF_SUCCESS;
 }
 
